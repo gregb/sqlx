@@ -21,6 +21,12 @@ import (
 // as field-to-name mappings are cached after first use on a type.
 var NameMapper = strings.ToLower
 
+// IgnoreMissingFields, when set to 'true', will cause struct scans to silently
+// ignore columns from a database query which don't map to any fields in the
+// specified struct. Otherwise, when 'false', an error is returned.  The
+// default value is false.
+var IgnoreMissingFields = false
+
 // Rows is a wrapper around sql.Rows which caches costly reflect operations
 // during a looped StructScan
 type Rows struct {
@@ -572,7 +578,8 @@ func (r *Rows) StructScan(dest interface{}) error {
 		for i, name := range columns {
 			// find that name in the struct
 			num, ok = fm[name]
-			if !ok {
+			log.Printf("ok = %v, IgnoreMissingFields = %v", ok, IgnoreMissingFields)
+			if !(ok || IgnoreMissingFields) {
 				return errors.New("Could not find name " + name + " in interface.")
 			}
 			r.fields[i] = num
@@ -839,7 +846,7 @@ func getFields(fm fieldmap, columns []string) ([]int, error) {
 	for i, name := range columns {
 		// find that name in the struct
 		num, ok = fm[name]
-		if !ok {
+		if !(ok || IgnoreMissingFields) {
 			return fields, errors.New("Could not find name " + name + " in interface")
 		}
 		fields[i] = num
