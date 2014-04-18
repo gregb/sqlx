@@ -27,6 +27,8 @@ var NameMapper = strings.ToLower
 // default value is false.
 var IgnoreMissingFields = false
 
+const columnNotMapped = -1
+
 // Rows is a wrapper around sql.Rows which caches costly reflect operations
 // during a looped StructScan
 type Rows struct {
@@ -846,10 +848,17 @@ func getFields(fm fieldmap, columns []string) ([]int, error) {
 	for i, name := range columns {
 		// find that name in the struct
 		num, ok = fm[name]
-		if !(ok || IgnoreMissingFields) {
-			return fields, errors.New("Could not find name " + name + " in interface")
+
+		if ok {
+			fields[i] = num
+		} else {
+			if !IgnoreMissingFields {
+				return fields, errors.New("Could not find name " + name + " in interface")
+			}
+
+			fields[i] = columnNotMapped
+
 		}
-		fields[i] = num
 	}
 	return fields, nil
 }
@@ -939,8 +948,17 @@ func getValues(v reflect.Value) []interface{} {
 // the getFieldmap function, in that they enumerate struct fields the same way.
 func setValues(fields []int, vptr reflect.Value, values []interface{}) {
 	vals := getValues(vptr)
+
 	for i, field := range fields {
-		values[i] = vals[field]
+
+		if field != columnNotMapped {
+			values[i] = vals[field]
+		} else {
+			// even if its not mapped, it's still in the Row or Rows, so
+			// just provide something for it to scan into that we will just ignore
+			values[i] = new(interface{})
+		}
+
 	}
 }
 
@@ -1084,21 +1102,29 @@ func StructScan(rows *sql.Rows, dest interface{}) error {
 		return errors.New("must pass a pointer, not a value, to StructScan destination")
 	}
 
+	// if it was a pointer, make it not a pointer
 	direct := reflect.Indirect(value)
 
+	// get the slice type
 	slice, err := BaseSliceType(value.Type())
 	if err != nil {
 		return err
 	}
 
+	// element type of the slice, and whether it's a pointer or struct or other
 	elem := slice.Elem()
 	base := elem.Kind()
 
 	isPtr := base == reflect.Ptr
 
 	if isPtr {
-		base = elem.Elem().Kind()
+		// it was a slice pointers.  we must go deeper
+		elem = elem.Elem()
+		base = elem.Kind()
 	}
+
+	// now we have a non-pointer elem, and a base that is either a struct or
+	// non-struct, but not a pointer
 
 	isStruct := (base == reflect.Struct)
 
