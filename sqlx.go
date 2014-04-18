@@ -1071,8 +1071,6 @@ func MapScan(r ColScanner, dest map[string]interface{}) error {
 // StructScan will scan in the entire rows result, so if you need do not want to
 // allocate structs for the entire result, use Queryx and see sqlx.Rows.StructScan.
 func StructScan(rows *sql.Rows, dest interface{}) error {
-	var v, vp reflect.Value
-	var isPtr bool
 
 	value := reflect.ValueOf(dest)
 	if value.Kind() != reflect.Ptr {
@@ -1085,40 +1083,60 @@ func StructScan(rows *sql.Rows, dest interface{}) error {
 	if err != nil {
 		return err
 	}
-	isPtr = slice.Elem().Kind() == reflect.Ptr
-	base, err := BaseStructType(slice.Elem())
-	if err != nil {
-		return err
+
+	elem := slice.Elem()
+	base := elem.Kind()
+
+	isPtr := base == reflect.Ptr
+
+	if isPtr {
+		base = elem.Elem().Kind()
 	}
 
-	fm, err := getFieldmap(base)
-	if err != nil {
-		return err
-	}
+	isStruct := (base == reflect.Struct)
 
-	columns, err := rows.Columns()
-	if err != nil {
-		return err
-	}
+	var columns []string
+	var fields []int
+	var values []interface{}
 
-	fields, err := getFields(fm, columns)
-	if err != nil {
-		return err
-	}
-	// this will hold interfaces which are pointers to each field in the struct
-	values := make([]interface{}, len(columns))
-	for rows.Next() {
-		// create a new struct type (which returns PtrTo) and indirect it
-		vp = reflect.New(base)
-		v = reflect.Indirect(vp)
-
-		setValues(fields, v, values)
-
-		// scan into the struct field pointers and append to our results
-		err = rows.Scan(values...)
+	if isStruct {
+		fm, err := getFieldmap(elem)
 		if err != nil {
 			return err
 		}
+
+		columns, err = rows.Columns()
+		if err != nil {
+			return err
+		}
+
+		fields, err = getFields(fm, columns)
+		if err != nil {
+			return err
+		}
+
+		// this will hold interfaces which are pointers to each field in the struct
+		values = make([]interface{}, len(columns))
+	}
+
+	for rows.Next() {
+		// create a new struct type (which returns PtrTo) and indirect it
+		vp := reflect.New(elem)
+		v := reflect.Indirect(vp)
+
+		// scan into the struct field pointers and append to our results
+		if isStruct {
+			setValues(fields, v, values)
+			err = rows.Scan(values...)
+		} else {
+			i := vp.Interface()
+			err = rows.Scan(i)
+		}
+
+		if err != nil {
+			return err
+		}
+
 		if isPtr {
 			direct.Set(reflect.Append(direct, vp))
 		} else {
